@@ -95,8 +95,9 @@ def aeroports_depart(o, rayon, nb):
                      key=lambda a: a["km"])
     proches = [a for a in proches if a["km"] <= rayon]
     # les grands aéroports (souvent les moins chers) + les 3 petits les plus proches
-    return sorted([a for a in proches if a["grand"]] + [a for a in proches if not a["grand"]][:3],
-                  key=lambda a: a["km"])[:nb]
+    # si la limite coupe, on garde les grands d'abord : les petits aéroports n'ont souvent que des vols illisibles
+    retenus = [a for a in proches if a["grand"]] + [a for a in proches if not a["grand"]][:3]
+    return sorted(sorted(retenus, key=lambda a: (not a["grand"], a["km"]))[:nb], key=lambda a: a["km"])
 
 
 def aeroports_arrivee(texte):
