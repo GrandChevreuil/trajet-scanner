@@ -63,6 +63,29 @@
   .autres summary { font-size: 13px; }
   .autres li { margin: 4px 0; }
   a { color: var(--accent); }
+  .vol { cursor: pointer; }
+  .vol:hover, .vol:focus-visible { border-color: var(--accent); outline: none; }
+  .indice { grid-column: 1 / -1; font-size: 12px; color: var(--doux); }
+  dialog { width: min(780px, calc(100% - 32px)); max-height: 90vh; padding: 0; color: var(--texte); background: var(--carte);
+           border: 1px solid var(--ligne); border-radius: 12px; }
+  dialog::backdrop { background: rgba(0, 0, 0, .5); }
+  .tete { position: sticky; top: 0; display: flex; justify-content: space-between; align-items: center; gap: 12px;
+          padding: 14px 20px; background: var(--carte); border-bottom: 1px solid var(--ligne); }
+  .tete h2 { margin: 0; font-size: 18px; }
+  .tete button { grid-column: auto; width: 36px; height: 36px; padding: 0; background: var(--fond); color: var(--texte);
+                 border: 1px solid var(--ligne); }
+  #corps { padding: 4px 20px 20px; }
+  #corps h3 { margin: 22px 0 6px; font-size: 15px; }
+  #corps ul, #corps ol { margin: 0; padding: 0; list-style: none; }
+  .etape { display: grid; grid-template-columns: 170px 1fr; gap: 2px 14px; padding: 10px 0; border-top: 1px solid var(--ligne); }
+  .quand { font-variant-numeric: tabular-nums; }
+  .quand.vague { color: var(--doux); }
+  .genre { display: inline-block; min-width: 56px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--doux); }
+  .etape.m-vol .titre { color: var(--accent); }
+  .etape.m-attente { color: var(--doux); }
+  .carte-info { padding: 8px 0; border-top: 1px solid var(--ligne); }
+  .liens { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+  @media (max-width: 700px) { .etape { grid-template-columns: 1fr; } }
   @media (max-width: 700px) {
     .large { grid-column: auto; }
     .vol { grid-template-columns: 1fr; }
@@ -109,11 +132,16 @@
   <div id="resultats"></div>
 </main>
 
+<dialog id="detail" aria-labelledby="detail-titre">
+  <div class="tete"><h2 id="detail-titre">Détail du voyage</h2><button type="button" id="fermer" aria-label="Fermer">✕</button></div>
+  <div id="corps"></div>
+</dialog>
+
 <script>
 const f = document.getElementById("f"), barre = document.getElementById("barre"), tri = document.getElementById("tri"),
   filtres = document.getElementById("filtres"), etat = document.getElementById("etat"), sortie = document.getElementById("resultats");
 const CHAMPS = ["depart", "arrivee", "du", "au", "jours", "rayon", "nb", "eur_km", "parking"];
-let donnees = null;
+let donnees = null, affichees = [];
 
 const roue = document.getElementById("roue"), reglages = document.getElementById("reglages");
 roue.addEventListener("click", () => { reglages.hidden = !reglages.hidden; roue.setAttribute("aria-expanded", !reglages.hidden); });
@@ -154,6 +182,7 @@ function classer() {
     const total = v.prix + (a ? a.cout : 0);
     return [{ v, a, options: acces, total, score: besoinAcces && !a ? Infinity : cle({ v, a, total }) }];
   }).sort((x, y) => x.score - y.score || x.total - y.total);
+  affichees = lignes;
 
   sortie.innerHTML = `<div class="resume">
       Départ : ${esc(donnees.origine.nom)} · aéroports de départ : ${esc(donnees.aeroports_depart.join(", "))}
@@ -172,7 +201,7 @@ function acces(a) {
 
 function ligne({ v, a, options, total }, i) {
   const autres = options.filter(x => x !== a);
-  return `<article class="vol">
+  return `<article class="vol" tabindex="0" data-i="${i}">
     <div class="total">${euros(total)}<small>n° ${i + 1}${a ? "" : " · accès inconnu"}</small></div>
     <div>
       <div class="titre">${esc(v.origine)} → ${esc(v.destination)} · ${euros(v.prix)} A/R</div>
@@ -182,10 +211,85 @@ function ligne({ v, a, options, total }, i) {
     <div>${a ? `<div class="titre">${acces(a)}</div>
       <div class="meta">${esc(a.detail)} · <a href="${esc(a.lien)}" target="_blank" rel="noopener">vérifier</a></div>`
       : `<div class="meta">Aucun train ni car trouvé jusqu'à cet aéroport · <a href="${esc(v.lien_transport)}" target="_blank" rel="noopener">voir les transports en commun</a></div>`}</div>
+    <div class="indice">Cliquer pour le détail : horaires, correspondances, liens, bagages.</div>
     ${autres.length ? `<details class="autres"><summary>Autres accès à ${esc(v.origine)}</summary><ul>${autres.map(x =>
       `<li>${acces(x)} — ${esc(x.detail)} · <a href="${esc(x.lien)}" target="_blank" rel="noopener">vérifier</a></li>`).join("")}</ul></details>` : ""}
   </article>`;
 }
+
+const fenetre = document.getElementById("detail"), corps = document.getElementById("corps");
+const heure = iso => iso.slice(11, 16);
+const jourLong = iso => new Date(iso).toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" });
+const GENRE = { train: "Train", bus: "Car", navette: "Navette", vol: "Vol", voiture: "Voiture", attente: "Attente" };
+const lien = l => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.texte)}</a>`;
+
+function quand(e) {
+  if (e.depart && e.arrivee) {
+    const autreJour = e.depart.slice(0, 10) !== e.arrivee.slice(0, 10);
+    return `<div class="quand">${jourLong(e.depart)} ${heure(e.depart)}<br>→ ${autreJour ? jourLong(e.arrivee) + " " : ""}${heure(e.arrivee)}</div>`;
+  }
+  if (e.depart) return `<div class="quand">${jourLong(e.depart)} ${heure(e.depart)}</div>`;
+  if (e.arrivee) return `<div class="quand">avant ${heure(e.arrivee)}</div>`;
+  return `<div class="quand vague">horaire à choisir</div>`;
+}
+
+function etape(e) {
+  const trajet = e.vers ? `${esc(e.de)} → ${esc(e.vers)}` : esc(e.de || "");
+  const minutes = e.minutes || (e.depart && e.arrivee ? Math.round((new Date(e.arrivee) - new Date(e.depart)) / 60000) : 0);
+  const infos = [minutes ? duree(minutes) : "", e.prix ? (typeof e.prix === "number" ? euros(e.prix) : e.prix) : ""].filter(Boolean).join(" · ");
+  return `<li class="etape m-${e.mode}">${quand(e)}<div><div class="titre"><span class="genre">${GENRE[e.mode]}</span> ${trajet}</div>
+    ${infos ? `<div class="meta">${esc(infos)}${e.estimation ? ' <span class="tag estim">estimation</span>' : ""}</div>` : ""}
+    ${e.texte ? `<div class="meta">${esc(e.texte)}</div>` : ""}</li>`;
+}
+
+function afficherDetail(l, d) {
+  const { v, a, total } = l;
+  corps.innerHTML = `
+    <p><strong>${euros(total)} au total</strong> (aller-retour) = vol ${euros(v.prix)} + trajets jusqu'à l'aéroport ${euros(a.cout)}
+      <span class="tag ${a.estimation ? "estim" : "reel"}">${a.estimation ? "estimation" : "prix réel"}</span></p>
+    <h3>Aller · ${jour(v.aller)}</h3><ol>${d.aller.map(etape).join("")}</ol>
+    <h3>Retour · ${jour(v.retour)}</h3><ol>${d.retour.map(etape).join("")}</ol>
+    <h3>Liens pour vérifier horaires et prix</h3><p class="liens">${d.liens.map(lien).join("")}</p>
+    <h3>Bagages</h3>
+    <p class="meta">Le prix du vol est le tarif de base : les bagages en soute et la plupart des bagages cabine se paient en option à la réservation.</p>
+    <ul>${d.bagages.map(b => `<li class="carte-info"><strong>${esc(b.nom)}</strong>
+      <div class="meta">${b.resume ? esc(b.resume) + " (résumé relevé sur des sites tiers, à confirmer)" : "Pas de résumé fiable : voir la page officielle."}</div>
+      <div class="liens">${b.liens.map(lien).join("")}</div></li>`).join("")}</ul>
+    <h3>Aéroports</h3>
+    <ul>${d.aeroports.map(x => `<li class="carte-info"><strong>${esc(x.nom)}</strong> (${esc(x.iata)}${x.ville ? ", " + esc(x.ville) : ""})
+      <div class="liens">${x.liens.map(lien).join("")}</div></li>`).join("")}</ul>
+    <h3>À savoir</h3><ul>${d.hypotheses.map(h => `<li class="meta">• ${esc(h)}</li>`).join("")}</ul>`;
+}
+
+async function ouvrir(l) {
+  fenetre.querySelector("h2").textContent = `${l.v.origine} → ${l.v.destination} · ${euros(l.total)}`;
+  corps.innerHTML = `<p class="meta">Chargement du détail…</p>`;
+  fenetre.showModal();
+  if (!l.a) {
+    corps.innerHTML = `<p>Aucun trajet connu jusqu'à cet aéroport.</p><p class="liens">${lien({ texte: "Voir les transports en commun (Google Maps)", url: l.v.lien_transport })}
+      ${lien({ texte: "Voir le vol sur Google Flights", url: l.v.lien })}</p>`;
+    return;
+  }
+  try {
+    const r = await fetch("/api/detail", { method: "POST", body: JSON.stringify({
+      depart: donnees.origine.nom, vol: l.v, mode: l.a.mode, eur_km: f.elements.eur_km.value, parking: f.elements.parking.value }) });
+    const json = await r.json();
+    if (!r.ok) throw new Error(json.erreur);
+    afficherDetail(l, json);
+  } catch (err) {
+    corps.innerHTML = `<p class="meta" style="color:#cf222e">Erreur : ${esc(err.message)}</p>`;
+  }
+}
+
+sortie.addEventListener("click", e => {
+  const carte = e.target.closest(".vol");
+  if (carte && !e.target.closest("a, summary, details")) ouvrir(affichees[carte.dataset.i]);
+});
+sortie.addEventListener("keydown", e => {
+  if (e.key === "Enter" && e.target.matches(".vol")) ouvrir(affichees[e.target.dataset.i]);
+});
+document.getElementById("fermer").addEventListener("click", () => fenetre.close());
+fenetre.addEventListener("click", e => { if (e.target === fenetre) fenetre.close(); });
 
 barre.addEventListener("change", () => donnees && classer());
 

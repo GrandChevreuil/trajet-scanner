@@ -16,7 +16,7 @@ from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlparse
+from urllib.parse import parse_qsl, quote, urlencode, urlparse
 
 from curl_cffi import requests
 
@@ -74,7 +74,7 @@ def aeroports():
         AEROPORTS_CSV.write_bytes(requests.get(AEROPORTS_SOURCE, headers=UA, timeout=120).content)
     with AEROPORTS_CSV.open(encoding="utf-8") as f:
         return [{"iata": r["iata_code"], "nom": r["name"], "ville": r["municipality"], "pays": r["iso_country"],
-                 "grand": r["type"] == "large_airport", "lat": float(r["latitude_deg"]), "lon": float(r["longitude_deg"])}
+                 "grand": r["type"] == "large_airport", "site": r["home_link"], "lat": float(r["latitude_deg"]), "lon": float(r["longitude_deg"])}
                 for r in csv.DictReader(f)
                 if r["iata_code"] and r["scheduled_service"] == "yes" and r["type"] in ("large_airport", "medium_airport")]
 
@@ -178,7 +178,11 @@ def bus(o, a, aller, retour, heure):
         if not alle or not ret:
             continue
         g, r = min(alle, key=lambda t: t["prix"]), min(ret, key=lambda t: t["prix"])
-        return {"mode": "bus", "cout": round(g["prix"] + r["prix"] + 2 * cout, 2),
+        return {"mode": "bus", "arret": nom, "arret_id": arret, "origine_id": origine,
+                "alle": {"depart": g["depart"].isoformat(timespec="minutes"),
+                         "arrivee": g["arrivee"].isoformat(timespec="minutes"), "prix": g["prix"]},
+                "dernier": {"cout": cout, "minutes": mins, "detail": detail},
+                "cout": round(g["prix"] + r["prix"] + 2 * cout, 2),
                 "minutes": round((g["arrivee"] - g["depart"]).total_seconds() / 60 + mins),
                 "detail": f"Flixbus {g['depart']:%H:%M}→{g['arrivee']:%H:%M} ({g['prix']} €) vers {nom}, + {detail} ; "
                           f"retour {r['depart']:%H:%M} ({r['prix']} €), à caler sur l'heure d'arrivée du vol",
@@ -239,6 +243,155 @@ def rechercher(p):
             "vols": vols, "vides": vides}
 
 
+# Compagnies : (domaine officiel, résumé bagages ou None). Un résumé n'est écrit que si plusieurs sites concordent.
+# ponytail: résumés relevés sur des sites tiers (pas de page officielle lisible), à confirmer ; lien officiel dans tous les cas.
+COMPAGNIES = {
+    "Wizz Air": ("wizzair.com", "Petit sac sous le siège gratuit (40 x 30 x 20 cm, 10 kg). Bagage cabine 55 x 40 x 23 cm "
+                                "(option Priority) et bagage en soute : payants."),
+    "Ryanair": ("ryanair.com", "Petit sac sous le siège gratuit (40 x 30 x 20 cm). Bagage cabine 10 kg (55 x 40 x 20 cm) "
+                               "avec l'option Priority ; soute payante."),
+    "Pegasus": ("flypgs.com", "Cabine : 1 bagage jusqu'à 8 kg. Soute : aucune en tarif Basic, 20 kg en Essentials à "
+                              "l'international."),
+    "easyJet": ("easyjet.com", None), "Transavia": ("transavia.com", None), "Vueling": ("vueling.com", None),
+    "Air France": ("airfrance.fr", None), "Lufthansa": ("lufthansa.com", None), "Aegean": ("aegeanair.com", None),
+    "SunExpress": ("sunexpress.com", None), "AJet": ("ajet.com", None), "Air Serbia": ("airserbia.com", None),
+    "Tap Air Portugal": ("flytap.com", None), "Royal Air Maroc": ("royalairmaroc.com", None),
+    "Turkish Airlines": ("turkishairlines.com", None), "Air Cairo": ("aircairo.com", None),
+    "Royal Jordanian": ("rj.com", None),
+}
+
+
+def recherche_google(q):
+    return "https://www.google.com/search?q=" + quote(q)
+
+
+def bagages(compagnies):
+    sortie = []
+    for nom in dict.fromkeys(c.strip() for c in compagnies.split("/") if c.strip()):
+        cle = max((k for k in COMPAGNIES if k.lower() in nom.lower()), key=len, default=None)
+        domaine, resume = COMPAGNIES[cle] if cle else (None, None)
+        sortie.append({"nom": nom, "resume": resume,
+                       "liens": [{"texte": "Page bagages officielle", "url": recherche_google(f"site:{domaine} bagages")}
+                                 if domaine else {"texte": "Chercher la politique bagages", "url": recherche_google(f"{nom} bagages cabine soute")},
+                                 *([{"texte": "Site de la compagnie", "url": f"https://{domaine}"}] if domaine else [])]})
+    return sortie
+
+
+def fiche_aeroport(iata, nom_vol):
+    a = next((x for x in aeroports() if x["iata"] == iata), None)
+    nom = a["nom"] if a else nom_vol
+    return {"iata": iata, "nom": nom, "ville": a["ville"] if a else "",
+            "liens": [{"texte": "Site de l'aéroport", "url": a["site"] if a and a["site"] else recherche_google(f"{nom} aéroport site officiel")},
+                      {"texte": "Infos pratiques (accès, bagages, horaires)", "url": recherche_google(f"{nom} aéroport accès enregistrement bagages")}]}
+
+
+def iso(dt):
+    return dt.isoformat(timespec="minutes") if dt else None
+
+
+def etapes_vol(segments, compagnies):
+    etapes = []
+    for i, s in enumerate(segments):
+        if i:
+            prec = segments[i - 1]
+            etapes.append({"mode": "attente", "de": prec["vers_nom"], "minutes": round(
+                (datetime.fromisoformat(s["depart"]) - datetime.fromisoformat(prec["arrivee"])).total_seconds() / 60),
+                "texte": f"Escale à {prec['vers_nom']} ({prec['vers']})"})
+        etapes.append({"mode": "vol", "de": f"{s['de_nom']} ({s['de']})", "vers": f"{s['vers_nom']} ({s['vers']})",
+                       "depart": s["depart"], "arrivee": s["arrivee"], "minutes": s["minutes"],
+                       "texte": f"{compagnies} · {s['avion']} · heures locales"})
+    return etapes
+
+
+def detail(p):
+    """Itinéraire complet d'une carte : accès aller, vols, accès retour, liens à vérifier, bagages, aéroports."""
+    o, v, mode = lieu(p["depart"]), p["vol"], p["mode"]
+    apt = {x["iata"]: x for x in aeroports()}
+    a, d = apt[v["origine"]], apt[v["destination"]]
+    aller, retour = date.fromisoformat(v["aller"]), date.fromisoformat(v["retour"])
+    decollage = datetime.fromisoformat(v["segments"][0]["depart"])
+    marge = 120  # présence conseillée à l'aéroport avant le décollage, en minutes
+    # ponytail: le retour n'est pas lu dans la page A/R ; on prend le vol le moins cher du jour en aller simple (indicatif)
+    vr = scanner.moins_cher(d["iata"], a["iata"], retour)
+    atterrissage = datetime.fromisoformat(vr["segments"][-1]["arrivee"]) if vr else None
+    google = f"https://www.google.com/maps/dir/?api=1&travelmode=transit&origin={o['lat']},{o['lon']}&destination={a['lat']},{a['lon']}"
+    liens = [{"texte": "Vol aller-retour sur Google Flights", "url": v["lien"]},
+             {"texte": f"Vol retour seul ({d['iata']} → {a['iata']}) sur Google Flights",
+              "url": f"{scanner.URL}?{urlencode(scanner.params(d['iata'], a['iata'], retour))}"}]
+    hypotheses = [f"Présence conseillée à l'aéroport {marge // 60} h avant le décollage."]
+    avant, apres_vol = [], []  # étapes avant le vol aller, après le vol retour
+
+    if mode == "train":
+        gare, lat, lon, cout, mins, texte = ACCES[a["iata"]]["train"]
+        prix = prix_train(o["nom"], gare)
+        duree = round(km((o["lat"], o["lon"]), (lat, lon)) / 150 * 60 + 20)
+        arrivee_gare = decollage - timedelta(minutes=marge + mins)
+        trajet = {"mode": "train", "de": o["nom"], "vers": gare.title(), "minutes": duree, "estimation": True,
+                  "prix": f"{prix[0]:.0f} à {prix[1]:.0f} € l'aller (fourchette open data, 2de classe, tarif normal)",
+                  "texte": f"Horaires non disponibles gratuitement : choisis un train arrivant avant {arrivee_gare:%H:%M}"
+                           f" ({arrivee_gare:%d/%m}). Durée estimée."}
+        avant = [trajet, {"mode": "navette", "de": gare.title(), "vers": a["nom"], "minutes": mins, "prix": f"{cout:g} €", "texte": texte}]
+        liens += [{"texte": "Horaires et prix du train (SNCF Connect)", "url": "https://www.sncf-connect.com/"},
+                  {"texte": "Itinéraire en transports en commun (Google Maps)", "url": google}]
+        premier = f"après {(atterrissage + timedelta(minutes=45 + mins)):%H:%M}" if atterrissage else "à caler sur l'heure d'atterrissage"
+        apres_vol = [{"mode": "navette", "de": a["nom"], "vers": gare.title(), "minutes": mins, "prix": f"{cout:g} €", "texte": texte},
+              {"mode": "train", "de": gare.title(), "vers": o["nom"], "minutes": duree, "estimation": True,
+               "prix": trajet["prix"], "texte": f"Horaires non disponibles gratuitement : prends un train au départ de la gare {premier}."}]
+        hypotheses.append("Durée du train estimée à 150 km/h + 20 min, prix = fourchette open data (pas un tarif réservable).")
+    elif mode == "bus":
+        b = bus(o, a, aller, retour, v["heure"])
+        if not b:
+            raise ValueError("Plus de car disponible pour ces dates")
+        dn = b["dernier"]
+        avant = [{"mode": "bus", "de": o["nom"], "vers": b["arret"], "depart": b["alle"]["depart"], "arrivee": b["alle"]["arrivee"],
+               "prix": f"{b['alle']['prix']} €", "texte": "Flixbus (prix réel)"}]
+        if dn["minutes"] or dn["cout"]:
+            avant.append({"mode": "navette", "de": b["arret"], "vers": a["nom"], "minutes": dn["minutes"],
+                       "prix": f"{dn['cout']:g} €", "texte": dn["detail"]})
+        trajets = flix_trajets(b["arret_id"], b["origine_id"], retour)
+        if atterrissage:
+            apres = atterrissage + timedelta(minutes=45 + dn["minutes"])
+            trajets = [t for t in trajets if t["depart"] >= apres]
+        if trajets:
+            t = min(trajets, key=lambda t: (t["prix"], t["depart"]))
+            apres_vol = ([{"mode": "navette", "de": a["nom"], "vers": b["arret"], "minutes": dn["minutes"], "prix": f"{dn['cout']:g} €",
+                    "texte": dn["detail"]}] if dn["minutes"] or dn["cout"] else [])
+            apres_vol.append({"mode": "bus", "de": b["arret"], "vers": o["nom"], "depart": iso(t["depart"]), "arrivee": iso(t["arrivee"]),
+                       "prix": f"{t['prix']} €", "texte": "Flixbus (prix réel), le moins cher après l'atterrissage"})
+        else:
+            apres_vol = [{"mode": "attente", "de": a["nom"], "texte": "Aucun car Flixbus ce jour-là après l'atterrissage : "
+                   "prévoir un train ou une nuit sur place."}]
+        liens.append({"texte": "Horaires et prix Flixbus (aller)", "url": b["lien"]})
+    else:
+        r = route(o["lat"], o["lon"], a["lat"], a["lon"])
+        if not r:
+            raise ValueError("Itinéraire en voiture introuvable")
+        eur_km, parking = float(p.get("eur_km", EUR_KM)), float(p.get("parking", PARKING))
+        jours = (retour - aller).days
+        base = {"mode": "voiture", "minutes": round(r[1]), "estimation": True}
+        avant = [{**base, "de": o["nom"], "vers": a["nom"], "prix": f"{r[0] * eur_km:.0f} € de carburant/péage",
+               "texte": f"{r[0]:.0f} km. Parking à l'aéroport : {parking:g} €/jour x {jours} j = {parking * jours:.0f} €."}]
+        apres_vol = [{**base, "de": a["nom"], "vers": o["nom"], "prix": f"{r[0] * eur_km:.0f} € de carburant/péage", "texte": f"{r[0]:.0f} km."}]
+        liens.append({"texte": "Itinéraire en voiture (Google Maps)",
+                      "url": f"https://www.google.com/maps/dir/{o['lat']},{o['lon']}/{a['lat']},{a['lon']}"})
+
+    if vr:
+        hypotheses.append("Vol retour = le moins cher du jour en aller simple (indicatif) : le prix aller-retour de la carte "
+                          "peut correspondre à un autre vol du même jour.")
+        compagnies = f"{v['compagnies']} / {vr['compagnies']}"
+        retour_vol = etapes_vol(vr["segments"], vr["compagnies"])
+    else:
+        compagnies, retour_vol = v["compagnies"], [{"mode": "vol", "de": f"{d['nom']} ({d['iata']})", "vers": f"{a['nom']} ({a['iata']})",
+            "texte": "Horaires du vol retour non lus : voir le lien « Vol retour seul »."}]
+    codes = dict.fromkeys([s["de"] for s in v["segments"]] + [s["vers"] for s in v["segments"]] + [x for s in (vr["segments"] if vr else []) for x in (s["de"], s["vers"])])
+    noms = {s["de"]: s["de_nom"] for s in v["segments"]} | {s["vers"]: s["vers_nom"] for s in v["segments"]}
+    return {"aller": [*avant, {"mode": "attente", "de": a["nom"], "arrivee": iso(decollage - timedelta(minutes=marge)),
+                            "texte": f"Être à l'aéroport au plus tard à {decollage - timedelta(minutes=marge):%H:%M} (enregistrement, bagages, sécurité)."},
+                      *etapes_vol(v["segments"], v["compagnies"])],
+            "retour": [*retour_vol, *apres_vol], "liens": liens, "hypotheses": hypotheses,
+            "bagages": bagages(compagnies), "aeroports": [fiche_aeroport(c, noms.get(c, c)) for c in codes]}
+
+
 class Handler(BaseHTTPRequestHandler):
     def envoyer(self, code, corps, type_="application/json; charset=utf-8"):
         corps = corps.encode() if isinstance(corps, str) else corps
@@ -256,6 +409,15 @@ class Handler(BaseHTTPRequestHandler):
             return self.envoyer(404, '{"erreur": "introuvable"}')
         try:
             self.envoyer(200, json.dumps(rechercher(dict(parse_qsl(u.query))), ensure_ascii=False))
+        except (ValueError, KeyError) as e:
+            self.envoyer(400, json.dumps({"erreur": str(e)}, ensure_ascii=False))
+
+    def do_POST(self):
+        if urlparse(self.path).path != "/api/detail":
+            return self.envoyer(404, '{"erreur": "introuvable"}')
+        try:
+            corps = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+            self.envoyer(200, json.dumps(detail(corps), ensure_ascii=False))
         except (ValueError, KeyError) as e:
             self.envoyer(400, json.dumps({"erreur": str(e)}, ensure_ascii=False))
 

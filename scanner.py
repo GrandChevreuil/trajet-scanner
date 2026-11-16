@@ -32,15 +32,17 @@ COOKIES = {"SOCS": "CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg"}
 REFUS = []  # (origine, destination) des recherches que Google a refusées (erreur 13)
 
 
-def params(o, d, aller, retour):
-    q = create_query(
-        flights=[FlightQuery(date=aller.isoformat(), from_airport=o, to_airport=d),
-                 FlightQuery(date=retour.isoformat(), from_airport=d, to_airport=o)],
-        trip="round-trip", seat="economy", passengers=Passengers(adults=1), language="fr", currency="EUR")
+def params(o, d, aller, retour=None):
+    """Recherche aller-retour, ou aller simple si retour est None."""
+    vols = [FlightQuery(date=aller.isoformat(), from_airport=o, to_airport=d)]
+    if retour:
+        vols.append(FlightQuery(date=retour.isoformat(), from_airport=d, to_airport=o))
+    q = create_query(flights=vols, trip="round-trip" if retour else "one-way", seat="economy",
+                     passengers=Passengers(adults=1), language="fr", currency="EUR")
     return {**q.params(), "gl": "FR"}
 
 
-def fetch(o, d, aller, retour):
+def fetch(o, d, aller, retour=None):
     for essai in range(4):
         try:
             r = requests.get(URL, params=params(o, d, aller, retour), cookies=COOKIES, impersonate="chrome", timeout=60)
@@ -65,7 +67,7 @@ def lire(html):
     return parse_js("data:" + json.dumps(p) + ",0")
 
 
-def moins_cher(o, d, aller, retour):
+def moins_cher(o, d, aller, retour=None):
     for essai in range(2):
         try:
             vols = [v for v in lire(fetch(o, d, aller, retour)) if v.price]
@@ -84,8 +86,12 @@ def moins_cher(o, d, aller, retour):
     # durée de l'aller = temps en vol + attentes aux escales (heures locales, mais l'attente est dans le même fuseau)
     duree = sum(f.duration for f in v.flights) + sum(
         int((heure(b.departure) - heure(a.arrival)).total_seconds() // 60) for a, b in zip(v.flights, v.flights[1:]))
-    return {"origine": o, "destination": d, "aller": aller.isoformat(), "retour": retour.isoformat(),
-            "prix": v.price, "duree_vol": duree, "escales": len(v.flights) - 1, "compagnies": " / ".join(v.airlines),
+    segments = [{"de": f.from_airport.code, "de_nom": f.from_airport.name, "vers": f.to_airport.code,
+                 "vers_nom": f.to_airport.name, "depart": heure(f.departure).isoformat(timespec="minutes"),
+                 "arrivee": heure(f.arrival).isoformat(timespec="minutes"), "minutes": f.duration, "avion": f.plane_type}
+                for f in v.flights]
+    return {"origine": o, "destination": d, "aller": aller.isoformat(), "retour": retour.isoformat() if retour else None,
+            "segments": segments, "prix": v.price, "duree_vol": duree, "escales": len(v.flights) - 1, "compagnies": " / ".join(v.airlines),
             "trajet_aller": " > ".join([v.flights[0].from_airport.code] + [s.to_airport.code for s in v.flights]),
             "heure": "%02d:%02d" % v.flights[0].departure.time,
             "lien": f"{URL}?{urlencode(params(o, d, aller, retour))}"}
@@ -113,9 +119,9 @@ def main():
 
     if a.csv:
         with open(a.csv, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=list(res[0]) if res else ["prix"])
+            w = csv.DictWriter(f, fieldnames=[k for k in res[0] if k != "segments"] if res else ["prix"])
             w.writeheader()
-            w.writerows(res)
+            w.writerows({k: v for k, v in r.items() if k != "segments"} for r in res)
     res.sort(key=lambda r: r["prix"])
     for o in a.de:
         for d in a.vers:
