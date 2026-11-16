@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+cache/
+resultats/
+.claude/
+.DS_Store
+combos_georgie.py

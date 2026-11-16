@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scanner voyage</title>
+<style>
+  :root {
+    --fond: #f6f5f2; --carte: #ffffff; --texte: #1d1d1f; --doux: #6b6b70; --ligne: #e3e1dc;
+    --accent: #1f6feb; --accent-texte: #ffffff; --vert: #1a7f37; --orange: #9a6700;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --fond: #141416; --carte: #1e1e22; --texte: #ececef; --doux: #9a9aa3; --ligne: #2e2e34;
+            --accent: #4c8dff; --accent-texte: #0b0b0c; --vert: #4ac26b; --orange: #d4a72c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fond); color: var(--texte);
+         font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .entete { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .roue { grid-column: auto; background: var(--carte); color: var(--doux); border: 1px solid var(--ligne);
+          width: 40px; height: 40px; padding: 0; display: grid; place-items: center; }
+  .roue[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
+  .roue svg { width: 22px; height: 22px; }
+  #reglages[hidden] { display: none; }
+  .barre { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; padding: 10px 16px; margin-bottom: 12px;
+           background: var(--carte); border: 1px solid var(--ligne); border-radius: 12px; position: sticky; top: 8px; z-index: 1; }
+  .barre[hidden] { display: none; }
+  .barre label { display: flex; align-items: center; gap: 6px; }
+  .barre select { font: inherit; color: var(--texte); background: var(--fond); border: 1px solid var(--ligne);
+                  border-radius: 8px; padding: 6px 8px; }
+  .barre input { width: auto; }
+  .case { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; color: var(--texte); }
+  .case input { width: auto; }
+  #reglages { grid-column: 1 / -1; display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .sous { color: var(--doux); margin: 0 0 20px; }
+  form, .resume, .vol { background: var(--carte); border: 1px solid var(--ligne); border-radius: 12px; }
+  form { padding: 16px; display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  label { display: grid; gap: 4px; font-size: 13px; color: var(--doux); }
+  input { font: inherit; color: var(--texte); background: var(--fond); border: 1px solid var(--ligne);
+          border-radius: 8px; padding: 8px 10px; width: 100%; }
+  .large { grid-column: span 2; }
+  details { grid-column: 1 / -1; }
+  details > div { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-top: 12px; }
+  summary { cursor: pointer; color: var(--doux); font-size: 13px; }
+  button { grid-column: 1 / -1; font: inherit; font-weight: 600; padding: 10px; border: 0; border-radius: 8px;
+           background: var(--accent); color: var(--accent-texte); cursor: pointer; }
+  button:disabled { opacity: .6; cursor: wait; }
+  #etat { margin: 16px 2px; color: var(--doux); }
+  #etat.erreur { color: #cf222e; }
+  .resume { padding: 12px 16px; margin-bottom: 12px; font-size: 13px; color: var(--doux); }
+  .vol { padding: 14px 16px; margin-bottom: 10px; display: grid; gap: 6px 16px;
+         grid-template-columns: 90px 1fr 1fr; align-items: start; }
+  .total { font-size: 22px; font-weight: 700; }
+  .total small { display: block; font-size: 12px; font-weight: 400; color: var(--doux); }
+  .titre { font-weight: 600; }
+  .meta { color: var(--doux); font-size: 13px; }
+  .tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid currentColor; margin-left: 6px; }
+  .reel { color: var(--vert); } .estim { color: var(--orange); }
+  .vides { margin-top: 6px; }
+  .autres { grid-column: 2 / -1; font-size: 13px; color: var(--doux); }
+  .autres summary { font-size: 13px; }
+  .autres li { margin: 4px 0; }
+  a { color: var(--accent); }
+  @media (max-width: 700px) {
+    .large { grid-column: auto; }
+    .vol { grid-template-columns: 1fr; }
+    .autres { grid-column: auto; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <div class="entete">
+    <div>
+      <h1>Scanner voyage</h1>
+      <p class="sous">Vol le moins cher et trajet jusqu'à l'aéroport (train, car, voiture en option), à l'aller comme au retour.</p>
+    </div>
+    <button type="button" class="roue" id="roue" aria-label="Réglages" aria-expanded="false" aria-controls="reglages">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </button>
+  </div>
+
+  <form id="f">
+    <label class="large">Départ (ville)<input name="depart" required placeholder="ex. Tours"></label>
+    <label class="large">Destination (pays, ville ou codes IATA)<input name="arrivee" required placeholder="ex. Géorgie, Tbilissi, KUT TBS"></label>
+    <label>Entre le<input type="date" name="du" required></label>
+    <label>et le (retour au plus tard)<input type="date" name="au"></label>
+    <label>Durée du séjour (jours)<input type="number" name="jours" value="10" min="1" max="60"></label>
+    <div id="reglages" hidden>
+      <label>Aéroports dans un rayon de (km)<input type="number" name="rayon" value="400" min="20" max="2000"></label>
+      <label>Aéroports de départ max<input type="number" name="nb" value="8" min="1" max="20"></label>
+      <label class="case"><input type="checkbox" name="voiture"> Inclure la voiture (sinon train et car seulement)</label>
+      <label>Voiture : coût au km (€, carburant + péage)<input type="number" name="eur_km" value="0.18" step="0.01" min="0"></label>
+      <label>Parking à l'aéroport (€ / jour)<input type="number" name="parking" value="8" step="0.5" min="0"></label>
+    </div>
+    <button>Chercher</button>
+  </form>
+
+  <p id="etat" role="status"></p>
+  <div id="barre" class="barre" hidden>
+    <label>Trier par <select id="tri"></select></label>
+    <span id="filtres" class="meta"></span>
+  </div>
+  <div id="resultats"></div>
+</main>
+
+<script>
+const f = document.getElementById("f"), barre = document.getElementById("barre"), tri = document.getElementById("tri"),
+  filtres = document.getElementById("filtres"), etat = document.getElementById("etat"), sortie = document.getElementById("resultats");
+const CHAMPS = ["depart", "arrivee", "du", "au", "jours", "rayon", "nb", "eur_km", "parking"];
+let donnees = null;
+
+const roue = document.getElementById("roue"), reglages = document.getElementById("reglages");
+roue.addEventListener("click", () => { reglages.hidden = !reglages.hidden; roue.setAttribute("aria-expanded", !reglages.hidden); });
+
+try {
+  const memo = JSON.parse(localStorage.getItem("scanner-voyage") || "{}");
+  for (const k of CHAMPS) if (memo[k]) f.elements[k].value = memo[k];
+  f.elements.voiture.checked = memo.voiture === "1";
+} catch {}
+
+const euros = n => n.toLocaleString("fr-FR", { maximumFractionDigits: 0 }) + " €";
+const duree = m => m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}`;
+const jour = iso => new Date(iso + "T12:00").toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" });
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const NOM = { voiture: "Voiture", train: "Train", bus: "Car" };
+
+// [libellé, accès le plus rapide (sinon le moins cher), accès obligatoire, clé de tri croissante]
+const TRIS = {
+  prix: ["Prix total : du moins cher au plus cher", false, true, l => l.total],
+  prix_desc: ["Prix total : du plus cher au moins cher", false, true, l => -l.total],
+  proche: ["Trajet jusqu'à l'aéroport : le plus court", true, true, l => l.a.minutes],
+  duree: ["Durée totale (accès + vol) : la plus courte", true, true, l => l.a.minutes + l.v.duree_vol],
+  vol: ["Prix du vol seul", false, false, l => l.v.prix],
+  acces: ["Prix de l'accès seul", false, true, l => l.a.cout],
+  tot: ["Départ le plus tôt", false, false, l => Date.parse(l.v.aller + "T" + l.v.heure)],
+  km: ["Aéroport le plus proche à vol d'oiseau", false, false, l => l.v.km],
+};
+tri.innerHTML = Object.entries(TRIS).map(([k, t]) => `<option value="${k}">${t[0]}</option>`).join("");
+
+function classer() {
+  const [, rapide, besoinAcces, cle] = TRIS[tri.value];
+  const modes = new Set([...filtres.querySelectorAll("input:checked")].map(x => x.value));
+  const filtre = modes.size < filtres.querySelectorAll("input").length;
+  const lignes = donnees.vols.flatMap(v => {
+    const acces = v.acces.filter(x => modes.has(x.mode));
+    if (filtre && !acces.length) return [];
+    const a = acces.reduce((m, x) => (!m || (rapide ? x.minutes < m.minutes : x.cout < m.cout) ? x : m), null);
+    const total = v.prix + (a ? a.cout : 0);
+    return [{ v, a, options: acces, total, score: besoinAcces && !a ? Infinity : cle({ v, a, total }) }];
+  }).sort((x, y) => x.score - y.score || x.total - y.total);
+
+  sortie.innerHTML = `<div class="resume">
+      Départ : ${esc(donnees.origine.nom)} · aéroports de départ : ${esc(donnees.aeroports_depart.join(", "))}
+      · arrivée : ${esc(donnees.aeroports_arrivee.join(", "))} · ${donnees.requetes} recherches de vols (un départ tous les ${donnees.pas} j),
+      ${lignes.length} résultats${donnees.refus ? ` · <strong>${donnees.refus} refusées par Google, résultats incomplets</strong>` : ""}
+      ${donnees.vides.length ? `<details class="vides"><summary>${donnees.vides.length} trajets sans résultat lisible
+        (vols avec correspondances que Google charge à part, ou pas de vol) : à vérifier à la main</summary>
+        ${donnees.vides.map(x => `<a href="${esc(x.lien)}" target="_blank" rel="noopener">${esc(x.trajet)}</a>`).join(" · ")}</details>` : ""}
+    </div>` + (lignes.length ? lignes.map(ligne).join("") : `<p>Aucun vol trouvé.</p>`);
+}
+
+function acces(a) {
+  return `${NOM[a.mode]} ${euros(a.cout)} A/R · ${duree(a.minutes)} l'aller
+    <span class="tag ${a.estimation ? "estim" : "reel"}">${a.estimation ? "estimation" : "prix réel"}</span>`;
+}
+
+function ligne({ v, a, options, total }, i) {
+  const autres = options.filter(x => x !== a);
+  return `<article class="vol">
+    <div class="total">${euros(total)}<small>n° ${i + 1}${a ? "" : " · accès inconnu"}</small></div>
+    <div>
+      <div class="titre">${esc(v.origine)} → ${esc(v.destination)} · ${euros(v.prix)} A/R</div>
+      <div class="meta">${jour(v.aller)} ${esc(v.heure)} → ${jour(v.retour)} · ${esc(v.compagnies)} · ${esc(v.trajet_aller)} · ${duree(v.duree_vol)} de vol${v.escales ? `, ${v.escales} escale${v.escales > 1 ? "s" : ""}` : ", direct"}</div>
+      <div class="meta">${esc(v.origine_nom)} → ${esc(v.destination_nom)} · <a href="${esc(v.lien)}" target="_blank" rel="noopener">voir le vol</a></div>
+    </div>
+    <div>${a ? `<div class="titre">${acces(a)}</div>
+      <div class="meta">${esc(a.detail)} · <a href="${esc(a.lien)}" target="_blank" rel="noopener">vérifier</a></div>`
+      : `<div class="meta">Aucun train ni car trouvé jusqu'à cet aéroport · <a href="${esc(v.lien_transport)}" target="_blank" rel="noopener">voir les transports en commun</a></div>`}</div>
+    ${autres.length ? `<details class="autres"><summary>Autres accès à ${esc(v.origine)}</summary><ul>${autres.map(x =>
+      `<li>${acces(x)} — ${esc(x.detail)} · <a href="${esc(x.lien)}" target="_blank" rel="noopener">vérifier</a></li>`).join("")}</ul></details>` : ""}
+  </article>`;
+}
+
+barre.addEventListener("change", () => donnees && classer());
+
+f.addEventListener("submit", async e => {
+  e.preventDefault();
+  const p = new URLSearchParams();
+  for (const k of CHAMPS) if (f.elements[k].value) p.set(k, f.elements[k].value);
+  if (f.elements.voiture.checked) p.set("voiture", "1");
+  try { localStorage.setItem("scanner-voyage", JSON.stringify(Object.fromEntries(p))); } catch {}
+  const bouton = f.querySelector("button");
+  bouton.disabled = true;
+  etat.className = "";
+  etat.textContent = "Recherche en cours… compte 3 à 5 secondes par vol cherché.";
+  sortie.innerHTML = "";
+  barre.hidden = true;
+  try {
+    const r = await fetch("/api/recherche?" + p);
+    const json = await r.json();
+    if (!r.ok) throw new Error(json.erreur);
+    donnees = json;
+    etat.textContent = "";
+    const presents = [...new Set(json.vols.flatMap(v => v.acces.map(x => x.mode)))];
+    filtres.innerHTML = presents.length > 1 ? "Accès : " + presents.map(m =>
+      `<label><input type="checkbox" value="${m}" checked> ${NOM[m]}</label>`).join(" ") : "";
+    barre.hidden = false;
+    classer();
+  } catch (err) {
+    etat.className = "erreur";
+    etat.textContent = "Erreur : " + err.message;
+  } finally {
+    bouton.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
